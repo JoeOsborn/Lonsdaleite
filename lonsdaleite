@@ -7,18 +7,22 @@ def usage():
   print("""
   -d  dump graph after parsing
   -c  expect input piped from Clasp's output
+  -ia  expect input in iClingo's output format with incremental parameters at the beginning of terms
+  -iz  expect input in iClingo's output format with incremental parameters at the end of terms
   -u  construct URL for Google's GraphViz Charts API
-  -b  open that URL in the default web browser
+  -b  open that URL in the default web browser; implies -u
   """)
 
 def main():
   expectClasp = False
+  expectIClingo = False
+  incrementalPrefix = True
   constructUrl = False
   showInBrowser = False
   dumpGraph = False
 
   try:
-    opts, args = getopt.getopt(sys.argv[1:], "dcub")
+    opts, args = getopt.getopt(sys.argv[1:], "dcubi:")
   except getopt.GetoptError, err:
     print str(err)
     usage()
@@ -29,10 +33,20 @@ def main():
       dumpGraph = True
     elif o == "-c":
       expectClasp = True
+    elif o == "-i" and a == "a":
+      expectIClingo = True
+      incrementalPrefix = True
+    elif o == "-i" and a == "z":
+      expectIClingo = True
+      incrementalPrefix = False
+    elif o == "-i":
+      usage()
+      sys.exit()
     elif o == "-u":
       constructUrl = True
     elif o == "-b":
       showInBrowser = True
+      constructUrl = True
 
   patternSpecs = {
       "type": 1,
@@ -48,7 +62,13 @@ def main():
   patterns = {}
   for k, v in patternSpecs.items():
     functor = "graphviz_" + k
-    args = "\(" + ",".join(["(.*?)"] * v) + "\)"
+    if expectIClingo:
+      if incrementalPrefix:
+        args = "\(.*," + ",".join(["(.*?)"] * v) + "\)"
+      else:
+        args = "\(" + ",".join(["(.*?)"] * v) + ",.*\)"
+    else:
+      args = "\(" + ",".join(["(.*?)"] * v) + "\)"
     patterns[k] = re.compile(functor + args)
 
   graph = {}
@@ -66,14 +86,26 @@ def main():
         graph[k].append(match.groups())
         break
 
+  def considerClaspTerms(termLine):
+    terms = termLine.split(" ") # TODO: handle embedded spaces
+    for t in terms:
+      consider(t)  
+
   if expectClasp:
     # look for all of the facts on a single line joined by spaces
     for line in sys.stdin.readlines():
       line = line.strip()
       if line and line[0].islower():
-        terms = line.split(" ") # TODO: handle embedded spaces
-        for t in terms:
-          consider(t)
+        considerClaspTerms(line)
+  elif expectIClingo:
+    # skip ahead until the last Answer: N\n.(...)\n.
+    allLines = sys.stdin.read()
+    answerSet = re.compile("(Answer\: [0-9]+\n.*\n)+")
+    match = answerSet.match(allLines)
+    if match:
+      lastSet = match.groups()[-1]
+      lastTerms = lastSet.strip().split("\n")[-1]
+      considerClaspTerms(lastTerms)
   else:
     # look for one fact per line
     for line in sys.stdin.readlines():
