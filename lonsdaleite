@@ -62,11 +62,17 @@ def main():
       "global_node_attr": 2,
       "global_edge_attr": 2}
 
-  def stringify_term(t):
-    if isinstance(t,str):
-      return t
+  def stringify_term(t,wrap=False):
+    if wrap and t:
+      if isinstance(t,str): return t
+      return "\""+stringify_term(t,False)+"\""
     elif t:
-      return "\""+str(t)+"\""
+      if isinstance(t,str):
+        return t
+      elif isinstance(t,tuple) and len(t)==2:
+        return t[0]+"("+",".join(map(stringify_term, t[1]))+")"
+      elif t:
+        return str(t)
     else:
       return None
 
@@ -107,7 +113,7 @@ def main():
             continue
           else:
             self.extend_current_term(c)
-      stringify_term(self.current_group())
+      stringify_term(self.current_group(),True)
       if self.incremental:
         if self.prefixOrSuffix:
           self.groups.pop(0)
@@ -118,18 +124,19 @@ def main():
       return tuple(self.groups)
     
     def current_group(self,permitTuple=False):
-      return self.get_group(self.groups, self.group_path, len(self.group_path), permitTuple)
+      return self.get_group(self.groups, len(self.group_path), permitTuple)
     
     def parent_group(self,permitTuple=False):
-      return self.get_group(self.groups, self.group_path[:-1], len(self.group_path)-1, permitTuple)
+      return self.get_group(self.groups, len(self.group_path)-1, permitTuple)
 
-    def get_group(self,g,p,n,permitTuple=False):
-      if n <= 0: return g
-      grp = g[p[-n]]
-      if isinstance(grp, tuple):
-        return self.get_group(grp if permitTuple else grp[1], p, n-1)
-      else:
-        return self.get_group(grp, p, n-1)
+    def get_group(self,g,n,permitTuple=False):
+      for i in range(0,n):
+        g = g[self.group_path[i]]
+        if isinstance(g,tuple) and i+1 < n:
+          g = g[1]
+      if isinstance(g,tuple):
+        return g if permitTuple else g[1]
+      return g
       
     def begin_group(self):
       self.parent_group()[self.group_path[-1]] = (self.current_group(),[""])
@@ -139,20 +146,20 @@ def main():
       grpTuple = self.parent_group(True)
       self.group_path.pop(-1)
       if grpTuple[0] == "":
-        self.parent_group()[self.group_path[-1]] = stringify_term(grpTuple[1])
+        self.parent_group()[self.group_path[-1]] = stringify_term(grpTuple[1], len(self.group_path) == 1)
       else:
-        self.parent_group()[self.group_path[-1]] = stringify_term(grpTuple)        
+        self.parent_group()[self.group_path[-1]] = stringify_term(grpTuple, len(self.group_path) == 1)
     
     def begin_quote(self):
       self.in_quote = True
-      self.extend_current_term("\"")
+      self.extend_current_term("\\\"")
     
     def end_quote(self):
       self.in_quote = False
-      self.extend_current_term("\"")
+      self.extend_current_term("\\\"")
     
     def new_term(self):
-      stringify_term(self.current_group())
+      stringify_term(self.current_group(), len(self.group_path) == 1)
       self.parent_group().append("")
       self.group_path[-1]+=1
         
@@ -242,7 +249,7 @@ def main():
   graphvizCode += '{'
   
   if graph['graph_attr']:
-      graphvizCode += "graph" + a_list(graph['graph_attr'])
+      graphvizCode += "graph" + a_list(graph['graph_attr'] + [("layout",graph['engine'][-1][0])])
       graphvizCode += ';'
   
   if graph['global_node_attr']:
