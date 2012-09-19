@@ -6,9 +6,9 @@ import sys, getopt, webbrowser, re, urllib
 def usage():
   print("""
   -d  dump graph after parsing
-  -c  expect input piped from Clasp's output
-  -ia  expect input in iClingo's output format with incremental parameters at the beginning of terms
-  -iz  expect input in iClingo's output format with incremental parameters at the end of terms
+  -c  expect input piped from Clasp's output; conflicts with -i{az}
+  -ia  expect input in iClingo's output format with incremental parameters at the beginning of terms; conflicts with -c
+  -iz  expect input in iClingo's output format with incremental parameters at the end of terms; conflicts with -c
   -u  construct URL for Google's GraphViz Charts API
   -b  open that URL in the default web browser; implies -u
   """)
@@ -32,11 +32,14 @@ def main():
     if o == "-d":
       dumpGraph = True
     elif o == "-c":
+      if expectIClingo: usage(); sys.exit()
       expectClasp = True
     elif o == "-i" and a == "a":
+      if expectClasp: usage(); sys.exit()
       expectIClingo = True
       incrementalPrefix = True
     elif o == "-i" and a == "z":
+      if expectClasp: usage(); sys.exit()
       expectIClingo = True
       incrementalPrefix = False
     elif o == "-i":
@@ -58,18 +61,112 @@ def main():
       "edge_attr": 4,
       "global_node_attr": 2,
       "global_edge_attr": 2}
+
+  def stringify_term(t):
+    if isinstance(t,str):
+      return t
+    elif t:
+      return "\""+str(t)+"\""
+    else:
+      return None
+
+  class Parser:
+    def __init__(self,f,a,incremental,prefixOrSuffix):
+      self.functor = f
+      self.arity = a
+      self.incremental = incremental
+      self.prefixOrSuffix = prefixOrSuffix
+      self.start = re.compile(self.functor+"\s*\(")
+      self.in_quote = False
+    
+    def __call__(self, str, *args, **kwargs):
+      str = str.strip()
+      if not self.start.match(str): return None
+      self.groups = [""]
+      self.group_path = [0]
+      return self.parse_until_end(str[len(self.functor)+1:-1])
+    
+    def parse_until_end(self,substr):
+      #loop through characters in substr.
+      for c in substr:
+        if self.in_quote:
+          if c == '\"':
+            self.end_quote()
+          else:
+            self.extend_current_term(c)
+        else:
+          if c == '(':
+            self.begin_group()
+          elif c == ')':
+            self.end_group()
+          elif c == '\"':
+            self.begin_quote()
+          elif c == ',':
+            self.new_term()
+          elif c.isspace():
+            continue
+          else:
+            self.extend_current_term(c)
+      stringify_term(self.current_group())
+      if self.incremental:
+        if self.prefixOrSuffix:
+          self.groups.pop(0)
+        else:
+          self.groups.pop(-1)
+        self.group_path[0]-=1
+    #  print ("return matches:"+str(self.groups))
+      return tuple(self.groups)
+    
+    def current_group(self,permitTuple=False):
+      return self.get_group(self.groups, self.group_path, len(self.group_path), permitTuple)
+    
+    def parent_group(self,permitTuple=False):
+      return self.get_group(self.groups, self.group_path[:-1], len(self.group_path)-1, permitTuple)
+
+    def get_group(self,g,p,n,permitTuple=False):
+      if n <= 0: return g
+      grp = g[p[-n]]
+      if isinstance(grp, tuple):
+        return self.get_group(grp if permitTuple else grp[1], p, n-1)
+      else:
+        return self.get_group(grp, p, n-1)
+      
+    def begin_group(self):
+      self.parent_group()[self.group_path[-1]] = (self.current_group(),[""])
+      self.group_path.append(0)
+    
+    def end_group(self):
+      grpTuple = self.parent_group(True)
+      self.group_path.pop(-1)
+      if grpTuple[0] == "":
+        self.parent_group()[self.group_path[-1]] = stringify_term(grpTuple[1])
+      else:
+        self.parent_group()[self.group_path[-1]] = stringify_term(grpTuple)        
+    
+    def begin_quote(self):
+      self.in_quote = True
+      self.extend_current_term("\"")
+    
+    def end_quote(self):
+      self.in_quote = False
+      self.extend_current_term("\"")
+    
+    def new_term(self):
+      stringify_term(self.current_group())
+      self.parent_group().append("")
+      self.group_path[-1]+=1
+        
+    def extend_current_term(self,c):
+      g = self.parent_group()[self.group_path[-1]]
+      if g is tuple:
+        print("syntax error: non-whitespace character after a functor ended but before the term separator")
+        sys.exit()
+      self.parent_group()[self.group_path[-1]] = g + str(c)
   
-  patterns = {}
+  parsers = {}
   for k, v in patternSpecs.items():
     functor = "graphviz_" + k
-    if expectIClingo:
-      if incrementalPrefix:
-        args = "\(.*," + ",".join(["(.*?)"] * v) + "\)"
-      else:
-        args = "\(" + ",".join(["(.*?)"] * v) + ",.*\)"
-    else:
-      args = "\(" + ",".join(["(.*?)"] * v) + "\)"
-    patterns[k] = re.compile(functor + args)
+    parsers[k] = Parser(functor, v, expectIClingo, incrementalPrefix)
 
   graph = {}
 
@@ -80,10 +177,10 @@ def main():
   graph['engine'].append(('dot',))
   
   def consider(term):
-    for k, v in patterns.items():
-      match = v.match(term)
-      if match:
-        graph[k].append(match.groups())
+    for k, v in parsers.items():
+      matched_terms = v(term)
+      if matched_terms:
+        graph[k].append(matched_terms)
         break
 
   def considerClaspTerms(termLine):
@@ -116,7 +213,6 @@ def main():
 
   a_list = lambda seq: "[" + (",".join("%s=%s" % kv for kv in seq)) + "]"
 
-
   graphType = graph['type'][-1][0]
   connector = "->" if graphType == "digraph" else "--"
   
@@ -139,6 +235,9 @@ def main():
   nodes = []
   for (n1,) in graph['node']:
     attrs = [(k,v) for n1t,k,v in graph['node_attr'] if n1t == n1]
+#    print ("attrs:"+str(attrs))
+ #   print ("n1:"+str(n1))
+  #  print ("append:"+a_list(attrs))
     nodes.append(n1 + a_list(attrs) if attrs else n1)
   graphvizCode += ';'.join(nodes)
   graphvizCode += ';'
