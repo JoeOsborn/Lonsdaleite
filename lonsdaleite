@@ -152,11 +152,11 @@ def main():
     
     def begin_quote(self):
       self.in_quote = True
-      self.extend_current_term("\"")
+      self.extend_current_term("\"" if len(self.group_path) == 1 else "\\\"")
     
     def end_quote(self):
       self.in_quote = False
-      self.extend_current_term("\"")
+      self.extend_current_term("\"" if len(self.group_path) == 1 else "\\\"")
     
     def new_term(self):
       stringify_term(self.current_group(), len(self.group_path) == 1)
