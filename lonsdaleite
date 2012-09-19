@@ -180,6 +180,7 @@ def main():
     for k, v in parsers.items():
       matched_terms = v(term)
       if matched_terms:
+        #print("match "+str(matched_terms)+" for "+k)
         graph[k].append(matched_terms)
         break
 
@@ -208,6 +209,26 @@ def main():
     for line in sys.stdin.readlines():
       consider(line.strip())
 
+  def attrs_for_node(nn):
+    attrs = filter(lambda attr:attr[0] == nn, graph['node_attr'])
+    #print "nn:"+str(nn)
+    #print "ext attrs:"+str(graph['node_attr'])
+    #print "tl attrs:"+str(attrs)
+    ret = {}
+    for a in attrs:
+      ret[a[1]] = a[2]
+    return ret
+  def node_ordering(n):
+    nn = n[0]
+    attrs = attrs_for_node(nn)
+#   print "attrs:"+str(attrs)
+    order = attrs['node_order'] if 'node_order' in attrs else 0
+#    print "node order for "+nn+":"+str(order)
+    return order
+    
+  #re-sort graph['node'] according to whether there's a [node_order=N] attribute
+  graph['node'] = sorted(graph['node'], key=node_ordering)
+
   if dumpGraph:
     print(graph)
 
@@ -235,9 +256,6 @@ def main():
   nodes = []
   for (n1,) in graph['node']:
     attrs = [(k,v) for n1t,k,v in graph['node_attr'] if n1t == n1]
-#    print ("attrs:"+str(attrs))
- #   print ("n1:"+str(n1))
-  #  print ("append:"+a_list(attrs))
     nodes.append(n1 + a_list(attrs) if attrs else n1)
   graphvizCode += ';'.join(nodes)
   graphvizCode += ';'
