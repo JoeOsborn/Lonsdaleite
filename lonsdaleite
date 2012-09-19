@@ -192,7 +192,24 @@ def main():
         break
 
   def considerClaspTerms(termLine):
-    terms = termLine.split(" ") # TODO: handle embedded spaces
+    # split on spaces with an even number of unescaped quotes behind them
+    terms = []
+    escaped = False
+    inQuote = False
+    term = ""
+    for c in termLine:
+      if c == "\\":
+        escaped = True
+      if c == "\"" and not escaped:
+        inQuote = not inQuote
+      if c == " " and not inQuote:
+        terms.append(term)
+        term = ""
+      else:
+        term += c
+      if escaped:
+        escaped = False
+    terms.append(term)
     for t in terms:
       consider(t)  
 
@@ -286,6 +303,7 @@ def main():
       print(url)
   else:
     print(graphvizCode)
+  return 0
 
   
 if __name__ == "__main__":
