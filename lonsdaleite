@@ -3,6 +3,8 @@
 
 import sys, getopt, webbrowser, re, urllib
 
+#TODO: Take a numerical argument (the end step) and throw out facts that are older than that, given that flag. Keep -ia and -iz to determine which spot to look at for age, and -s to skip numerical facts. Same as co2lp.
+
 def usage():
   print("""
   -d  dump graph after parsing
@@ -76,6 +78,13 @@ def main():
     else:
       return None
 
+  def is_integer(s):
+    try:
+      int(s)
+      return True
+    except ValueError:
+      return False
+
   class Parser:
     def __init__(self,f,a,incremental,prefixOrSuffix):
       self.functor = f
@@ -83,9 +92,10 @@ def main():
       self.incremental = incremental
       self.prefixOrSuffix = prefixOrSuffix
       self.start = re.compile(self.functor+"\s*\(")
-      self.in_quote = False
     
     def __call__(self, str, *args, **kwargs):
+      self.in_quote = False
+      self.escaped = False
       str = str.strip()
       if not self.start.match(str): return None
       self.groups = [""]
@@ -96,10 +106,14 @@ def main():
       #loop through characters in substr.
       for c in substr:
         if self.in_quote:
-          if c == '\"':
+          if c == '\"' and not self.escaped:
             self.end_quote()
           else:
             self.extend_current_term(c)
+          if c == "\\":
+            self.escaped = True
+          else:
+            self.escaped = False
         else:
           if c == '(':
             self.begin_group()
@@ -113,12 +127,13 @@ def main():
             continue
           else:
             self.extend_current_term(c)
-      stringify_term(self.current_group(),True)
       if self.incremental:
         if self.prefixOrSuffix:
-          self.groups.pop(0)
+          if is_integer(self.groups[0]):
+            self.groups.pop(0)
         else:
-          self.groups.pop(-1)
+          if is_integer(self.groups[-1]):
+            self.groups.pop(-1)
         self.group_path[0]-=1
     #  print ("return matches:"+str(self.groups))
       return tuple(self.groups)
@@ -191,25 +206,34 @@ def main():
         graph[k].append(matched_terms)
         break
 
-  def considerClaspTerms(termLine):
-    # split on spaces with an even number of unescaped quotes behind them
+  def splitTerms(termLine):
     terms = []
     escaped = False
-    inQuote = False
+    in_quote = False
+    pdepth = 0
     term = ""
     for c in termLine:
-      if c == "\\":
-        escaped = True
+      if c == "(" and not escaped and not in_quote:
+        pdepth+=1
+      if c == ")" and not escaped and not in_quote:
+        pdepth-=1
       if c == "\"" and not escaped:
-        inQuote = not inQuote
-      if c == " " and not inQuote:
+        in_quote = not in_quote
+      if c == " " and not in_quote and pdepth == 0:
         terms.append(term)
         term = ""
       else:
         term += c
-      if escaped:
+      if c == "\\" and in_quote:
+        escaped = True
+      else:
         escaped = False
     terms.append(term)
+    return terms
+    
+  def considerClaspTerms(termLine):
+    # split on spaces with an even number of unescaped quotes and no parens behind them
+    terms = splitTerms(termLine)
     for t in terms:
       consider(t)  
 
@@ -235,9 +259,6 @@ def main():
 
   def attrs_for_node(nn):
     attrs = filter(lambda attr:attr[0] == nn, graph['node_attr'])
-    #print "nn:"+str(nn)
-    #print "ext attrs:"+str(graph['node_attr'])
-    #print "tl attrs:"+str(attrs)
     ret = {}
     for a in attrs:
       ret[a[1]] = a[2]
@@ -245,13 +266,24 @@ def main():
   def node_ordering(n):
     nn = n[0]
     attrs = attrs_for_node(nn)
-#   print "attrs:"+str(attrs)
     order = attrs['node_order'] if 'node_order' in attrs else 0
-#    print "node order for "+nn+":"+str(order)
+    return order
+  def attrs_for_edge(nn1,nn2):
+    attrs = filter(lambda attr:attr[0] == nn1 and attr[1] == nn2, graph['edge_attr'])
+    ret = {}
+    for a in attrs:
+      ret[a[2]] = a[3]
+    return ret
+  def edge_ordering(n):
+    nn1 = n[0]
+    nn2 = n[1]
+    attrs = attrs_for_edge(nn1,nn2)
+    order = attrs['edge_order'] if 'edge_order' in attrs else 0
     return order
     
-  #re-sort graph['node'] according to whether there's a [node_order=N] attribute
+  #re-sort graph['node'|'edge'] according to whether there's a [{node|edge}_order=N] attribute
   graph['node'] = sorted(graph['node'], key=node_ordering)
+  graph['edge'] = sorted(graph['edge'], key=edge_ordering)
 
   if dumpGraph:
     print(graph)
